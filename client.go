@@ -21,11 +21,11 @@ const ClientID = "207646673902501888"
 func should[T any](v T, _ error) T { return v }
 
 type Client struct {
-	ws               *websocket.Conn
-	authcode         string
-	loggedIn         bool
-	currentChannelID string
-	channel          *VoiceChannel
+	ws        *websocket.Conn
+	authcode  string
+	loggedIn  bool
+	channelID string
+	state     *VoiceChannel
 }
 
 func NewClient() *Client {
@@ -106,7 +106,7 @@ func (c *Client) handleCommand(msg Message) error {
 		if err != nil {
 			return err
 		}
-		c.channel = &state
+		c.state = &state
 		return c.subscribeVoice(state.ID)
 	case CmdSubscribe:
 		slog.Info("subscribed to event", "event", msg.Data.GetString("evt"))
@@ -158,8 +158,8 @@ func (c *Client) handleEvent(msg Message) error {
 			return nil
 		}
 		slog.Info("Voice channel detected", "id", msg.Data.GetString("channel_id"))
-		c.unsubVoice(c.currentChannelID)
-		c.channel = nil
+		c.unsubVoice(c.channelID)
+		c.state = nil
 		return c.getCurrentVoiceChannel()
 	default:
 		os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640)
@@ -168,45 +168,48 @@ func (c *Client) handleEvent(msg Message) error {
 }
 
 func (c *Client) update() error {
-	return json.NewEncoder(os.Stdout).Encode(c.channel)
+	return json.NewEncoder(os.Stdout).Encode(c.state)
 }
 
 func (c *Client) reset() {
-	c.channel = nil
-	c.currentChannelID = ""
+	c.state = nil
+	c.channelID = ""
 }
 
 func (c *Client) ensureMembers() {
-	if c.channel.Members == nil {
-		c.channel.Members = make(VoiceMembers)
+	if c.state.Members == nil {
+		c.state.Members = make(VoiceMembers)
 	}
 }
 
 func (c *Client) deleteMember(id string) {
-	if c.channel == nil {
+	if c.state == nil {
 		return
 	}
 	c.ensureMembers()
-	delete(c.channel.Members, id)
+	delete(c.state.Members, id)
 }
 
 func (c *Client) setMember(m VoiceMember) {
-	if c.channel == nil {
+	if c.state == nil {
 		return
 	}
 	c.ensureMembers()
-	c.channel.Members[m.User.ID] = m
+	c.state.Members[m.User.ID] = m
 }
 
 func (c *Client) setMemberTalking(id string, state bool) {
-	if c.channel == nil {
+	if c.state == nil {
 		return
 	}
 	c.ensureMembers()
-	if m, ok := c.channel.Members[id]; ok {
-		m.Talking = state
-		c.channel.Members[id] = m
+	m, ok := c.state.Members[id]
+	if !ok {
+		c.getCurrentVoiceChannel() // user is missing update the vc to get thte user
+		return
 	}
+	m.Talking = state
+	c.state.Members[id] = m
 }
 
 func (c *Client) subscribe(event Event, args Map) error {
@@ -244,12 +247,12 @@ var voiceEvents = []Event{
 }
 
 func (c *Client) subscribeVoice(channelID string) error {
-	if c.currentChannelID != "" {
+	if c.channelID != "" {
 		if err := c.unsubVoice(channelID); err != nil {
 			return err
 		}
 	}
-	c.currentChannelID = channelID
+	c.channelID = channelID
 	for event := range slices.Values(voiceEvents) {
 		if err := c.subscribeChannel(event, channelID); err != nil {
 			return err
@@ -259,7 +262,7 @@ func (c *Client) subscribeVoice(channelID string) error {
 }
 
 func (c *Client) unsubVoice(channelID string) error {
-	c.currentChannelID = ""
+	c.channelID = ""
 	for event := range slices.Values(voiceEvents) {
 		if err := c.unsubscribeChannel(event, channelID); err != nil {
 			return err
@@ -276,7 +279,7 @@ func (c *Client) getCurrentVoiceChannel() error {
 func (c *Client) authorize(access string) error {
 	req := NewRequest(CmdAuthenticate)
 	req.SetArg("access_token", access)
-	slog.Info("Requesting authorization via access_token", "access_token", access)
+	slog.Info("Requesting authorization via access_token")
 	return c.ws.WriteJSON(req)
 }
 
