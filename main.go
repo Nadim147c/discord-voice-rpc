@@ -4,10 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"os"
+
+	"github.com/charmbracelet/log"
 )
 
 func main() {
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{})
+	handler := log.NewWithOptions(os.Stderr, log.Options{TimeFunction: nil})
 	slog.SetDefault(slog.New(handler))
 	client := NewClient()
 	client.Listen(context.Background())

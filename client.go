@@ -18,12 +18,7 @@ import (
 
 const ClientID = "207646673902501888"
 
-func must[T any](v T, e error) T {
-	if e != nil {
-		panic(e)
-	}
-	return v
-}
+func should[T any](v T, _ error) T { return v }
 
 type Client struct {
 	ws               *websocket.Conn
@@ -61,7 +56,7 @@ func (c *Client) Listen(ctx context.Context) error {
 			return err
 		}
 
-		var msg Request
+		var msg Message
 		json.Unmarshal(message, &msg)
 		slog.Info("Message", "command", msg.Command, "event", msg.Event)
 
@@ -71,7 +66,7 @@ func (c *Client) Listen(ctx context.Context) error {
 	}
 }
 
-func (c *Client) handleCommand(msg Request) error {
+func (c *Client) handleCommand(msg Message) error {
 	switch msg.Command {
 	case CmdDispatch:
 		return c.handleEvent(msg)
@@ -93,6 +88,11 @@ func (c *Client) handleCommand(msg Request) error {
 		}
 		return c.subscribe(EvtVoiceChannelSelect, nil)
 	case CmdGetSelectedVoiceChannel:
+		if msg.Data == nil {
+			c.reset()
+			return nil
+		}
+
 		var state VoiceChannel
 		err := mapstructure.Decode(msg.Data, &state)
 		if err != nil {
@@ -103,13 +103,18 @@ func (c *Client) handleCommand(msg Request) error {
 	case CmdSubscribe:
 		slog.Info("subscribed to event", "event", msg.Data.GetString("evt"))
 		return nil
+	case CmdUnsubscribe:
+		slog.Info("unsubscribed from event", "event", msg.Data.GetString("evt"))
+		return nil
 	default:
-		os.WriteFile("unknown-command.json", must(json.Marshal(msg)), 0o640)
+		os.WriteFile("unknown-command.json", should(json.Marshal(msg)), 0o640)
 		panic("unknown-command " + msg.Command.String())
 	}
 }
 
-func (c *Client) handleEvent(msg Request) error {
+func (c *Client) handleEvent(msg Message) error {
+	defer c.update()
+
 	switch msg.Event {
 	case EvtReady:
 		if c.authcode != "" {
@@ -123,36 +128,58 @@ func (c *Client) handleEvent(msg Request) error {
 			return err
 		}
 		c.setMember(member)
-		return c.update()
+		return nil
+	case EvtVoiceStateDelete:
+		var member VoiceMember
+		err := mapstructure.Decode(msg.Data, &member)
+		if err != nil {
+			return err
+		}
+		c.deleteMember(member.User.ID)
+		return nil
 	case EvtSpeakingStart, EvtSpeakingStop:
 		id, err := msg.Data.GetStringE("user_id")
 		if err != nil {
 			return err
 		}
 		c.setMemberTalking(id, msg.Event == EvtSpeakingStart)
-		return c.update()
+		return nil
 	case EvtVoiceChannelSelect:
-		if msg.Data.Has("channel_id") {
-			c.unsubVoice(c.currentChannelID)
-			c.channel = nil
-			c.update()
+		if msg.Data.GetString("channel_id") == "" {
+			c.reset()
+			return nil
 		}
+		slog.Info("Voice channel detected", "id", msg.Data.GetString("channel_id"))
+		c.unsubVoice(c.currentChannelID)
+		c.channel = nil
 		return c.getCurrentVoiceChannel()
 	default:
-		os.WriteFile("unknown-event.json", must(json.Marshal(msg)), 0o640)
+		os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640)
 		panic("unknown-event " + msg.Event.String())
 	}
 }
 
-// TODO: implemete update
 func (c *Client) update() error {
 	return json.NewEncoder(os.Stdout).Encode(c.channel)
+}
+
+func (c *Client) reset() {
+	c.channel = nil
+	c.currentChannelID = ""
 }
 
 func (c *Client) ensureMembers() {
 	if c.channel.Members == nil {
 		c.channel.Members = make(VoiceMembers)
 	}
+}
+
+func (c *Client) deleteMember(id string) {
+	if c.channel == nil {
+		return
+	}
+	c.ensureMembers()
+	delete(c.channel.Members, id)
 }
 
 func (c *Client) setMember(m VoiceMember) {
@@ -297,6 +324,6 @@ func (c *Client) fetchAuthcode(code string) error {
 }
 
 func (c *Client) getTokenFile() string {
-	config := must(os.UserConfigDir())
+	config := should(os.UserConfigDir())
 	return filepath.Join(config, "dcat"+ClientID+".bin") // .bin ext make sense!
 }

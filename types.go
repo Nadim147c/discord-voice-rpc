@@ -66,7 +66,7 @@ func (m Map) Has(k string) bool {
 }
 
 func (m Map) GetString(k string) string {
-	return must(m.GetStringE(k))
+	return should(m.GetStringE(k))
 }
 
 func (m Map) GetStringE(k string) (string, error) {
@@ -78,7 +78,7 @@ func (m Map) GetStringE(k string) (string, error) {
 	return cast.ToStringE(v)
 }
 
-type Request struct {
+type Message struct {
 	Command Command `json:"cmd"`
 	Event   Event   `json:"evt,omitempty"`
 	Args    Map     `json:"args,omitempty"`
@@ -86,8 +86,8 @@ type Request struct {
 	Nonce   string  `json:"nonce"`
 }
 
-func NewRequest(cmd Command) *Request {
-	r := new(Request)
+func NewRequest(cmd Command) *Message {
+	r := new(Message)
 	r.Command = cmd
 	r.Nonce = generateRandomString()
 	return r
@@ -104,7 +104,7 @@ func generateRandomString() string {
 	return string(out[:])
 }
 
-func (r *Request) SetArg(k string, v any) {
+func (r *Message) SetArg(k string, v any) {
 	r.Args.Set(k, v)
 }
 
@@ -165,35 +165,10 @@ type Decoration struct {
 	SkuID string `json:"skuId"`
 }
 
-type status struct {
+type Status struct {
 	Deaf     bool `json:"deaf"`
 	Mute     bool `json:"mute"`
 	SelfDeaf bool `json:"self_deaf"`
 	SelfMute bool `json:"self_mute"`
 	Suppress bool `json:"suppress"`
-}
-
-type Status uint32
-
-func nthBit(n int, b bool) Status {
-	if b {
-		return 1 << (n - 1)
-	}
-	return 0
-}
-
-func (s *Status) UnmarshalJSON(data []byte) error {
-	var status status
-	err := json.Unmarshal(data, &status)
-	if err != nil {
-		return err
-	}
-	var n Status
-	n |= nthBit(1, status.Deaf)
-	n |= nthBit(2, status.Mute)
-	n |= nthBit(3, status.SelfDeaf)
-	n |= nthBit(4, status.SelfMute)
-	n |= nthBit(5, status.Suppress)
-	*s = n
-	return nil
 }
