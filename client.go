@@ -47,11 +47,19 @@ func (c *Client) Listen(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	context.AfterFunc(ctx, func() { conn.Close() })
 
 	c.ws = conn
 
 	for {
 		_, message, err := conn.ReadMessage()
+
+		select {
+		case <-ctx.Done(): // we ignore the connection err when context is done
+			return ctx.Err()
+		default:
+		}
+
 		if err != nil {
 			return err
 		}
