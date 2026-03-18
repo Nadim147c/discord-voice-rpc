@@ -1,3 +1,9 @@
+// Package main provides a client for the Discord Voice RPC. It listens to the
+// Discord Voice Overlay API, retrieves the voice channel state, and prints it
+// to stdout as JSON.
+//
+// This is intended to be used for displaying a Discord overlay on any
+// application, specifically for tools like Quickshell.
 package main
 
 import (
@@ -16,46 +22,62 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// ClientID is the client id for the discord voice rpc.
+//
+// NOTE: Change this if you want!
 const ClientID = "207646673902501888"
 
-func should[T any](v T, _ error) T { return v }
-
+// Client is the discord ipc listener and voice state manager.
 type Client struct {
-	ws        *websocket.Conn
-	authcode  string
-	loggedIn  bool
+	// ws is the websocket connection to discord.
+	ws *websocket.Conn
+	// authcode is the authorization code for discord.
+	authcode string
+	// loggedIn is true if the client is logged in.
+	loggedIn bool
+	// channelID is the ID of the voice channel.
 	channelID string
-	state     *VoiceChannel
+	// state is the voice channel state.
+	state *VoiceState
 }
 
-func NewClient() *Client {
-	c := new(Client)
-	return c
-}
+// NewClient creates a new client.
+func NewClient() *Client { return new(Client) }
 
+// Listen listens to the discord ipc and handles the commands. It blocks until
+// ctx is done.
 func (c *Client) Listen(ctx context.Context) error {
 	headers := http.Header{}
 	headers.Add("Origin", "http://localhost:3000")
 
-	query := url.Values{}
+	url := should(url.Parse("ws://127.0.0.1:6463/"))
+	query := url.Query()
 	query.Set("client_id", ClientID)
 	query.Set("v", "1")
-	url := "ws://127.0.0.1:6463/?" + query.Encode()
+	url.RawQuery = query.Encode()
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url, headers)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url.String(), headers)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	context.AfterFunc(ctx, func() { conn.Close() })
 
 	c.ws = conn
+
+	authcode, err := os.ReadFile(c.getTokenFile())
+	if err == nil {
+		c.authcode = string(bytes.TrimSpace(authcode))
+	}
+
+	// force close the connection when context is done.
+	context.AfterFunc(ctx, func() { conn.Close() })
 
 	for {
 		_, message, err := conn.ReadMessage()
 
+		// we ignore the connection err when context is done.
 		select {
-		case <-ctx.Done(): // we ignore the connection err when context is done
+		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
@@ -74,6 +96,7 @@ func (c *Client) Listen(ctx context.Context) error {
 	}
 }
 
+// handleCommand handles the commands from discord.
 func (c *Client) handleCommand(msg Message) error {
 	switch msg.Command {
 	case CmdDispatch:
@@ -83,9 +106,11 @@ func (c *Client) handleCommand(msg Message) error {
 		if err != nil {
 			return err
 		}
-		return c.fetchAuthcode(code)
+		slog.Debug("Received authcode from discord client", "code", code)
+		return c.fetchAccessToken(code)
 	case CmdAuthenticate:
 		if msg.Event == EvtError {
+			slog.Error("Authentication failed", "msg", msg.Data)
 			os.Remove(c.getTokenFile())
 			c.authcode = ""
 			return c.requestAuthcode()
@@ -101,7 +126,7 @@ func (c *Client) handleCommand(msg Message) error {
 			return nil
 		}
 
-		var state VoiceChannel
+		var state VoiceState
 		err := mapstructure.Decode(msg.Data, &state)
 		if err != nil {
 			return err
@@ -115,12 +140,15 @@ func (c *Client) handleCommand(msg Message) error {
 		slog.Info("unsubscribed from event", "event", msg.Data.GetString("evt"))
 		return nil
 	default:
+		// TODO: remove this!
 		os.WriteFile("unknown-command.json", should(json.Marshal(msg)), 0o640)
 		panic("unknown-command " + msg.Command.String())
 	}
 }
 
+// handleEvent handles the command from discord which is an event.
 func (c *Client) handleEvent(msg Message) error {
+	// always print the output when new event is received.
 	defer c.update()
 
 	switch msg.Event {
@@ -162,26 +190,31 @@ func (c *Client) handleEvent(msg Message) error {
 		c.state = nil
 		return c.getCurrentVoiceChannel()
 	default:
+		// TODO: remove this!
 		os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640)
 		panic("unknown-event " + msg.Event.String())
 	}
 }
 
+// update prints the output of c.state to stdout.
 func (c *Client) update() error {
 	return json.NewEncoder(os.Stdout).Encode(c.state)
 }
 
+// reset resets the client state. Generate when user leaves voice channel.
 func (c *Client) reset() {
 	c.state = nil
 	c.channelID = ""
 }
 
+// ensureMembers ensures that the c.state.Members is initialized.
 func (c *Client) ensureMembers() {
 	if c.state.Members == nil {
 		c.state.Members = make(VoiceMembers)
 	}
 }
 
+// deleteMember deletes the member from the client state.
 func (c *Client) deleteMember(id string) {
 	if c.state == nil {
 		return
@@ -190,6 +223,7 @@ func (c *Client) deleteMember(id string) {
 	delete(c.state.Members, id)
 }
 
+// setMember sets the member in the client state.
 func (c *Client) setMember(m VoiceMember) {
 	if c.state == nil {
 		return
@@ -198,6 +232,7 @@ func (c *Client) setMember(m VoiceMember) {
 	c.state.Members[m.User.ID] = m
 }
 
+// setMemberTalking sets the talking state of the member in the client state.
 func (c *Client) setMemberTalking(id string, state bool) {
 	if c.state == nil {
 		return
@@ -205,39 +240,45 @@ func (c *Client) setMemberTalking(id string, state bool) {
 	c.ensureMembers()
 	m, ok := c.state.Members[id]
 	if !ok {
-		c.getCurrentVoiceChannel() // user is missing update the vc to get thte user
+		// user is missing update the vc to get thte user
+		c.getCurrentVoiceChannel()
 		return
 	}
 	m.Talking = state
 	c.state.Members[id] = m
 }
 
+// subscribe subscribes to an event.
 func (c *Client) subscribe(event Event, args Map) error {
-	req := NewRequest(CmdSubscribe)
+	req := NewMessage(CmdSubscribe)
 	req.Event = event
 	req.Args = args
 	return c.ws.WriteJSON(req)
 }
 
+// unsubscribe unsubscribes from an event.
 func (c *Client) unsubscribe(event Event, args map[string]any) error {
-	req := NewRequest(CmdUnsubscribe)
+	req := NewMessage(CmdUnsubscribe)
 	req.Event = event
 	req.Args = args
 	return c.ws.WriteJSON(req)
 }
 
+// subscribeChannel subscribes to an event on a specific channel.
 func (c *Client) subscribeChannel(event Event, channel string) error {
 	var m Map
 	m.Set("channel_id", channel)
 	return c.subscribe(event, m)
 }
 
+// unsubscribeChannel unsubscribes from an event on a specific channel.
 func (c *Client) unsubscribeChannel(event Event, channel string) error {
 	var m Map
 	m.Set("channel_id", channel)
 	return c.unsubscribe(event, m)
 }
 
+// voiceEvents is a list of events that we create about.
 var voiceEvents = []Event{
 	EvtVoiceStateCreate,
 	EvtVoiceStateUpdate,
@@ -246,6 +287,8 @@ var voiceEvents = []Event{
 	EvtSpeakingStop,
 }
 
+// subscribeVoice subscribes to all voice events for a specific channel.
+// Returns after first subscription error.
 func (c *Client) subscribeVoice(channelID string) error {
 	if c.channelID != "" {
 		if err := c.unsubVoice(channelID); err != nil {
@@ -261,6 +304,8 @@ func (c *Client) subscribeVoice(channelID string) error {
 	return nil
 }
 
+// unsubVoice unsubscribes from all voice events for a specific channel.
+// Returns after first unsubscription error.
 func (c *Client) unsubVoice(channelID string) error {
 	c.channelID = ""
 	for event := range slices.Values(voiceEvents) {
@@ -271,20 +316,25 @@ func (c *Client) unsubVoice(channelID string) error {
 	return nil
 }
 
+// getCurrentVoiceChannel gets the state of current voice channel. Run this when
+// you want update and any user is missing from cached state of current voice
+// channel.
 func (c *Client) getCurrentVoiceChannel() error {
-	req := NewRequest(CmdGetSelectedVoiceChannel)
+	req := NewMessage(CmdGetSelectedVoiceChannel)
 	return c.ws.WriteJSON(req)
 }
 
+// authorize authorizes the client with an access token.
 func (c *Client) authorize(access string) error {
-	req := NewRequest(CmdAuthenticate)
+	req := NewMessage(CmdAuthenticate)
 	req.SetArg("access_token", access)
 	slog.Info("Requesting authorization via access_token")
 	return c.ws.WriteJSON(req)
 }
 
+// requestAuthcode requests an authcode from Discord Client.
 func (c *Client) requestAuthcode() error {
-	req := NewRequest(CmdAuthorize)
+	req := NewMessage(CmdAuthorize)
 	req.Args = map[string]any{
 		"client_id": ClientID,
 		"scopes": []string{
@@ -295,16 +345,18 @@ func (c *Client) requestAuthcode() error {
 		},
 		"prompt": "none",
 	}
-
+	slog.Info("Requesting authcode from discord client")
 	return c.ws.WriteJSON(req)
 }
 
-func (c *Client) fetchAuthcode(code string) error {
-	slog.Info("fetching access_token from streamkit api")
-	payload := struct {
-		Code string `json:"code"`
-	}{Code: code}
+type StreamkitRequest struct {
+	Code string `json:"code"`
+}
 
+// fetchAccessToken fetches an access token from Discord streamkit overlay api.
+func (c *Client) fetchAccessToken(code string) error {
+	slog.Info("fetching access_token from streamkit api")
+	payload := StreamkitRequest{Code: code}
 	buf := bytes.NewBuffer(nil)
 	json.NewEncoder(buf).Encode(payload)
 
@@ -326,7 +378,9 @@ func (c *Client) fetchAuthcode(code string) error {
 	}
 
 	c.authcode = streamkitResp.AccessToken
+	slog.Debug("Received access token", "access_token", streamkitResp.AccessToken)
 
+	// save access_token to file
 	if err := os.WriteFile(c.getTokenFile(), []byte(c.authcode), 0o640); err != nil {
 		slog.Error("failed to cache access_token", "error", err)
 	}
@@ -334,7 +388,9 @@ func (c *Client) fetchAuthcode(code string) error {
 	return c.authorize(c.authcode)
 }
 
+// getTokenFile returns the path to the access token file.
 func (c *Client) getTokenFile() string {
 	config := should(os.UserConfigDir())
-	return filepath.Join(config, "dcat"+ClientID+".bin") // .bin ext make sense!
+	// we do lil trolling to any hacker accessing your computer!
+	return filepath.Join(config, "drpc_"+ClientID+".bin")
 }

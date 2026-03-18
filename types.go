@@ -10,8 +10,13 @@ import (
 	"github.com/spf13/cast"
 )
 
+// should is a helper function to ignore the error.
+func should[T any](v T, _ error) T { return v }
+
+// Command is a command sent to the discord ipc.
 type Command string
 
+// String returns the string representation of the command.
 func (c Command) String() string {
 	return string(c)
 }
@@ -27,8 +32,10 @@ const (
 	CmdDispatch                Command = "DISPATCH"
 )
 
+// Event is an event sent by the discord ipc.
 type Event string
 
+// String returns the string representation of the event.
 func (e Event) String() string {
 	return string(e)
 }
@@ -44,31 +51,41 @@ const (
 	EvtVoiceChannelSelect Event = "VOICE_CHANNEL_SELECT"
 )
 
+// ErrKeyNotFound is returned when a key is not found in the map.
 var ErrKeyNotFound = errors.New("key not found")
 
+// Map is a map of strings to any. It is used to store the arguments and data of
+// a message.
 type Map map[string]any
 
+// ensure ensures that the map is initialized.
 func (m *Map) ensure() {
 	if *m == nil {
 		*m = make(Map)
 	}
 }
 
+// Set sets the value of the key.
 func (m *Map) Set(k string, v any) {
 	m.ensure()
 	(*m)[k] = v
 }
 
+// Has checks if the key exists in the map.
 func (m Map) Has(k string) bool {
 	m.ensure()
 	_, ok := m[k]
 	return ok
 }
 
+// GetString is like GetString but ignores the error and returns an empty string
+// if the key is not found.
 func (m Map) GetString(k string) string {
 	return should(m.GetStringE(k))
 }
 
+// GetStringE returns the value of the key as a string. It returns an error if
+// the key is not found or failed to convert the data to string.
 func (m Map) GetStringE(k string) (string, error) {
 	m.ensure()
 	v, ok := m[k]
@@ -78,6 +95,7 @@ func (m Map) GetStringE(k string) (string, error) {
 	return cast.ToStringE(v)
 }
 
+// Message is a message sent to the discord ipc.
 type Message struct {
 	Command Command `json:"cmd"`
 	Event   Event   `json:"evt,omitempty"`
@@ -86,29 +104,39 @@ type Message struct {
 	Nonce   string  `json:"nonce"`
 }
 
-func NewRequest(cmd Command) *Message {
-	r := new(Message)
-	r.Command = cmd
-	r.Nonce = generateRandomString()
-	return r
+// NewMessage creates a new request with the given command.
+func NewMessage(cmd Command) *Message {
+	return &Message{
+		Command: cmd,
+		Nonce:   generateRandomString(),
+	}
 }
 
+// generateRandomString generates a random string of the given length with a-z
+// charset.
 func generateRandomString() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz"
 	const size = len(charset)
 	out := [30]byte{}
 	rand.Read(out[:])
 	for i, b := range out {
-		out[i] = charset[int(b)%size]
+		out[i] = charset[int(b)%size] // normalize into a-z range
 	}
 	return string(out[:])
 }
 
+// SetArg sets the value of the key in the arguments map.
 func (r *Message) SetArg(k string, v any) {
 	r.Args.Set(k, v)
 }
 
-type VoiceChannel struct {
+// SetData sets the value of the key in the data map.
+func (r *Message) SetData(k string, v any) {
+	r.Data.Set(k, v)
+}
+
+// VoiceState is the voice channel state. It holds users and their voice states.
+type VoiceState struct {
 	GuildID   string       `json:"guild_id"`
 	ID        string       `json:"id"`
 	Name      string       `json:"name"`
@@ -116,8 +144,12 @@ type VoiceChannel struct {
 	Members   VoiceMembers `json:"voice_states"`
 }
 
+// VoiceMembers is a map of users and their voice states. It implemets
+// json.Unmarshaler and json.Marshaler so the it can be encoded and decoded
+// as/from json array.
 type VoiceMembers map[string]VoiceMember
 
+// UnmarshalJSON unmarshals the voice members from JSON.
 func (vm *VoiceMembers) UnmarshalJSON(data []byte) error {
 	var slice []VoiceMember
 	if err := json.Unmarshal(data, &slice); err != nil {
@@ -136,6 +168,7 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 		slice = append(slice, member)
 	}
 
+	// sort users by username
 	slices.SortFunc(slice, func(a, b VoiceMember) int {
 		return strings.Compare(a.User.Username, b.User.Username)
 	})
@@ -143,6 +176,7 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 	return json.Marshal(slice)
 }
 
+// VoiceMember is a  member of voice channel.
 type VoiceMember struct {
 	Mute     bool    `json:"mute"`
 	Nickname string  `json:"nick"`
@@ -152,19 +186,16 @@ type VoiceMember struct {
 	Volume   float64 `json:"volume"`
 }
 
+// User is a discord user.
 type User struct {
 	Avatar   string `json:"avatar"`
-	Bot      bool   `json:"bot"`
 	Nickname string `json:"global_name"`
+	Bot      bool   `json:"bot"`
 	ID       string `json:"id"`
 	Username string `json:"username"`
 }
 
-type Decoration struct {
-	Asset string `json:"asset"`
-	SkuID string `json:"skuId"`
-}
-
+// Status is a voice status of a VoiceMember.
 type Status struct {
 	Deaf     bool `json:"deaf"`
 	Mute     bool `json:"mute"`
