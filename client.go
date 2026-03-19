@@ -31,6 +31,9 @@ const ClientID = "207646673902501888"
 type Client struct {
 	// ws is the websocket connection to discord.
 	ws *websocket.Conn
+
+	ctx  context.Context
+	http http.Client
 	// authcode is the authorization code for discord.
 	authcode string
 	// loggedIn is true if the client is logged in.
@@ -47,6 +50,9 @@ func NewClient() *Client { return new(Client) }
 // Listen listens to the discord ipc and handles the commands. It blocks until
 // ctx is done.
 func (c *Client) Listen(ctx context.Context) error {
+	c.ctx = ctx
+	defer func() { c.ctx = nil }()
+
 	headers := http.Header{}
 	headers.Add("Origin", "http://localhost:3000")
 
@@ -56,10 +62,11 @@ func (c *Client) Listen(ctx context.Context) error {
 	query.Set("v", "1")
 	url.RawQuery = query.Encode()
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, url.String(), headers)
+	conn, initialResponse, err := websocket.DefaultDialer.DialContext(ctx, url.String(), headers)
 	if err != nil {
 		return err
 	}
+	initialResponse.Body.Close() //nolint
 	defer conn.Close()
 
 	c.ws = conn
@@ -70,7 +77,9 @@ func (c *Client) Listen(ctx context.Context) error {
 	}
 
 	// force close the connection when context is done.
-	context.AfterFunc(ctx, func() { conn.Close() })
+	context.AfterFunc(ctx, func() {
+		conn.Close() //nolint
+	})
 
 	for {
 		_, message, err := conn.ReadMessage()
@@ -87,7 +96,10 @@ func (c *Client) Listen(ctx context.Context) error {
 		}
 
 		var msg Message
-		json.Unmarshal(message, &msg)
+		if err := json.Unmarshal(message, &msg); err != nil {
+			slog.Error("failed unmarshal message", "error", err)
+			continue
+		}
 		slog.Info("Message", "command", msg.Command, "event", msg.Event)
 
 		if err := c.handleCommand(msg); err != nil {
@@ -111,7 +123,7 @@ func (c *Client) handleCommand(msg Message) error {
 	case CmdAuthenticate:
 		if msg.Event == EvtError {
 			slog.Error("Authentication failed", "msg", msg.Data)
-			os.Remove(c.getTokenFile())
+			os.Remove(c.getTokenFile()) //nolint
 			c.authcode = ""
 			return c.requestAuthcode()
 		}
@@ -139,10 +151,15 @@ func (c *Client) handleCommand(msg Message) error {
 	case CmdUnsubscribe:
 		slog.Info("unsubscribed from event", "event", msg.Data.GetString("evt"))
 		return nil
+	case CmdGetVoiceSettings, CmdSetVoiceSettings:
+		slog.Info("get voice settings", "event", msg.Data.GetString("evt"))
+		return nil
 	default:
-		// TODO: remove this!
-		os.WriteFile("unknown-command.json", should(json.Marshal(msg)), 0o640)
-		panic("unknown-command " + msg.Command.String())
+		slog.Info("unknown command", "command", msg.Command)
+		if *debug {
+			os.WriteFile("unknown-command.json", should(json.Marshal(msg)), 0o640) //nolint
+		}
+		return nil
 	}
 }
 
@@ -186,19 +203,27 @@ func (c *Client) handleEvent(msg Message) error {
 			return nil
 		}
 		slog.Info("Voice channel detected", "id", msg.Data.GetString("channel_id"))
-		c.unsubVoice(c.channelID)
+		if err := c.unsubVoice(c.channelID); err != nil {
+			return err
+		}
 		c.state = nil
 		return c.getCurrentVoiceChannel()
+	case EvtError:
+		slog.Error("Error event detected", "msg", msg.Data)
+		return nil
 	default:
-		// TODO: remove this!
-		os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640)
-		panic("unknown-event " + msg.Event.String())
+		slog.Info("unknown event", "event", msg.Event)
+		if *debug {
+			os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640) //nolint
+		}
+		return nil
 	}
 }
 
 // update prints the output of c.state to stdout.
 func (c *Client) update() error {
-	return json.NewEncoder(os.Stdout).Encode(c.state)
+	out := GetOutput(c.state)
+	return json.NewEncoder(os.Stdout).Encode(out)
 }
 
 // reset resets the client state. Generate when user leaves voice channel.
@@ -241,7 +266,9 @@ func (c *Client) setMemberTalking(id string, state bool) {
 	m, ok := c.state.Members[id]
 	if !ok {
 		// user is missing update the vc to get thte user
-		c.getCurrentVoiceChannel()
+		if err := c.getCurrentVoiceChannel(); err != nil {
+			slog.Error("failed to get current voice channel", "error", err)
+		}
 		return
 	}
 	m.Talking = state
@@ -358,16 +385,24 @@ func (c *Client) fetchAccessToken(code string) error {
 	slog.Info("fetching access_token from streamkit api")
 	payload := StreamkitRequest{Code: code}
 	buf := bytes.NewBuffer(nil)
-	json.NewEncoder(buf).Encode(payload)
+	json.NewEncoder(buf).Encode(payload) //nolint
 
-	resp, err := http.Post("https://streamkit.discord.com/overlay/token", "application/json", buf)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, "https://streamkit.discord.com/overlay/token", buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get streamkit access_token")
+		buf := bytes.NewBuffer(nil)
+		buf.ReadFrom(resp.Body) //nolint
+		return fmt.Errorf("failed to get streamkit access_token: %s", buf.String())
 	}
 
 	var streamkitResp struct {
@@ -381,7 +416,7 @@ func (c *Client) fetchAccessToken(code string) error {
 	slog.Debug("Received access token", "access_token", streamkitResp.AccessToken)
 
 	// save access_token to file
-	if err := os.WriteFile(c.getTokenFile(), []byte(c.authcode), 0o640); err != nil {
+	if err := os.WriteFile(c.getTokenFile(), []byte(c.authcode), 0o600); err != nil {
 		slog.Error("failed to cache access_token", "error", err)
 	}
 

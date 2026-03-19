@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -195,6 +196,11 @@ type User struct {
 	Username string `json:"username"`
 }
 
+// AvatarURL returns the avatar URL of the user.
+func (u User) AvatarURL() string {
+	return fmt.Sprintf("https://cdn.discordapp.com/avatars/%s/%s.png", u.ID, u.Avatar)
+}
+
 // Status is a voice status of a VoiceMember.
 type Status struct {
 	Deaf     bool `json:"deaf"`
@@ -202,4 +208,62 @@ type Status struct {
 	SelfDeaf bool `json:"self_deaf"`
 	SelfMute bool `json:"self_mute"`
 	Suppress bool `json:"suppress"`
+}
+
+// Output is the output of the discord voice rpc used for printing output.
+type Output struct {
+	GuildID     string         `json:"guildId"`
+	ChannelID   string         `json:"channelId"`
+	ChannelName string         `json:"channelName"`
+	UserLimit   int64          `json:"userLimit"`
+	Members     []OutputMember `json:"members"`
+}
+
+// OutputMember is a member of the voice channel used for printing output.
+type OutputMember struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	Nickname     string `json:"nickname"`
+	ServerName   string `json:"serverName"`
+	Avatar       string `json:"avatar"`
+	AvatarURL    string `json:"avatarURL"`
+	IsTalking    bool   `json:"isTalking"`
+	IsBot        bool   `json:"isBot"`
+	IsMuted      bool   `json:"isMuted"`
+	IsDeaf       bool   `json:"isDeaf"`
+	IsSelfDeaf   bool   `json:"isSelfDeaf"`
+	IsSelfMute   bool   `json:"isSelfMute"`
+	IsSuppressed bool   `json:"isSuppressed"`
+}
+
+// GetOutput converts a VoiceState to an Output.
+func GetOutput(vs *VoiceState) *Output {
+	if vs == nil {
+		return nil
+	}
+	members := make([]OutputMember, 0, len(vs.Members))
+	for _, member := range vs.Members {
+		members = append(members, OutputMember{
+			ID:           member.User.ID,
+			Username:     member.User.Username,
+			Nickname:     member.Nickname,
+			ServerName:   member.User.Nickname,
+			Avatar:       member.User.Avatar,
+			AvatarURL:    member.User.AvatarURL(),
+			IsTalking:    member.Talking,
+			IsBot:        member.User.Bot,
+			IsMuted:      member.Mute,
+			IsDeaf:       member.Status.Deaf,
+			IsSelfDeaf:   member.Status.SelfDeaf,
+			IsSelfMute:   member.Status.SelfMute,
+			IsSuppressed: member.Status.Suppress,
+		})
+	}
+	return &Output{
+		GuildID:     vs.GuildID,
+		ChannelID:   vs.ID,
+		ChannelName: vs.Name,
+		UserLimit:   vs.UserLimit,
+		Members:     members,
+	}
 }

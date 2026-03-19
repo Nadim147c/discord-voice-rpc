@@ -12,9 +12,9 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-func main() {
-	debug := flag.Bool("debug", false, "enable debug logging")
+var debug = flag.Bool("debug", false, "enable debug logging")
 
+func main() {
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(),
