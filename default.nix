@@ -4,11 +4,11 @@
 }:
 buildGoModule {
   pname = "discord-voice-rpc";
-  version = "0.0.1-unstable-2025-03-20";
+  version = "0.0.1-unstable-2026-03-20";
 
-  src = ../.;
+  src = ./.;
 
-  vendorHash = "";
+  vendorHash = "sha256-mGKzxh0Hv9V2Fo61KWAhv85xQzqFpqeTmzMeCcS8ei0=";
 
   ldflags = [
     "-s"
