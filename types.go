@@ -229,7 +229,7 @@ type OutputMember struct {
 	AvatarURL    string `json:"avatarURL"`
 	IsTalking    bool   `json:"isTalking"`
 	IsBot        bool   `json:"isBot"`
-	IsMuted      bool   `json:"isMuted"`
+	IsMute       bool   `json:"isMute"`
 	IsDeaf       bool   `json:"isDeaf"`
 	IsSelfDeaf   bool   `json:"isSelfDeaf"`
 	IsSelfMute   bool   `json:"isSelfMute"`
@@ -252,7 +252,7 @@ func GetOutput(vs *VoiceState) *Output {
 			AvatarURL:    member.User.AvatarURL(),
 			IsTalking:    member.Talking,
 			IsBot:        member.User.Bot,
-			IsMuted:      member.Mute,
+			IsMute:       member.Mute,
 			IsDeaf:       member.Status.Deaf,
 			IsSelfDeaf:   member.Status.SelfDeaf,
 			IsSelfMute:   member.Status.SelfMute,

@@ -11,7 +11,7 @@ QtObject {
     property string avatarURL: ""
     property bool isTalking: false
     property bool isBot: false
-    property bool isMuted: false
+    property bool isMute: false
     property bool isDeaf: false
     property bool isSelfDeaf: false
     property bool isSelfMute: false
