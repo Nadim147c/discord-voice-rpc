@@ -138,10 +138,10 @@ func (r *Message) SetData(k string, v any) {
 
 // VoiceState is the voice channel state. It holds users and their voice states.
 type VoiceState struct {
-	GuildID   string       `json:"guild_id"`
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	UserLimit int64        `json:"user_limit"`
+	GuildID   string       `mapstructure:"guild_id"`
+	ID        string       `mapstructure:"id"`
+	Name      string       `mapstructure:"name"`
+	UserLimit int64        `mapstructure:"user_limit"`
 	Members   VoiceMembers `json:"voice_states"`
 }
 
@@ -179,21 +179,21 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 
 // VoiceMember is a  member of voice channel.
 type VoiceMember struct {
-	Mute     bool    `json:"mute"`
-	Nickname string  `json:"nick"`
-	Talking  bool    `json:"talking"`
-	User     User    `json:"user"`
-	Status   Status  `json:"voice_state"`
-	Volume   float64 `json:"volume"`
+	Mute     bool    `mapstructure:"mute"`
+	Nickname string  `mapstructure:"nick"`
+	Talking  bool    `mapstructure:"talking"`
+	User     User    `mapstructure:"user"`
+	Status   Status  `mapstructure:"voice_state"`
+	Volume   float64 `mapstructure:"volume"`
 }
 
 // User is a discord user.
 type User struct {
-	Avatar   string `json:"avatar"`
-	Nickname string `json:"global_name"`
-	Bot      bool   `json:"bot"`
-	ID       string `json:"id"`
-	Username string `json:"username"`
+	Avatar   string `mapstructure:"avatar"`
+	Nickname string `mapstructure:"global_name"`
+	Bot      bool   `mapstructure:"bot"`
+	ID       string `mapstructure:"id"`
+	Username string `mapstructure:"username"`
 }
 
 // AvatarURL returns the avatar URL of the user.
@@ -203,11 +203,11 @@ func (u User) AvatarURL() string {
 
 // Status is a voice status of a VoiceMember.
 type Status struct {
-	Deaf     bool `json:"deaf"`
-	Mute     bool `json:"mute"`
-	SelfDeaf bool `json:"self_deaf"`
-	SelfMute bool `json:"self_mute"`
-	Suppress bool `json:"suppress"`
+	Deaf     bool `mapstructure:"deaf"`
+	Mute     bool `mapstructure:"mute"`
+	SelfDeaf bool `mapstructure:"self_deaf"`
+	SelfMute bool `mapstructure:"self_mute"`
+	Suppress bool `mapstructure:"suppress"`
 }
 
 func toggleBit(b bool, i uint8) uint8 {
@@ -259,8 +259,8 @@ func GetOutput(vs *VoiceState) *Output {
 		members = append(members, OutputMember{
 			ID:         member.User.ID,
 			Username:   member.User.Username,
-			Nickname:   member.Nickname,
-			ServerName: member.User.Nickname,
+			Nickname:   member.User.Nickname,
+			ServerName: member.Nickname,
 			Avatar:     member.User.Avatar,
 			AvatarURL:  member.User.AvatarURL(),
 			IsTalking:  member.Talking,
