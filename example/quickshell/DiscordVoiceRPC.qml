@@ -58,11 +58,7 @@ Singleton {
                     avatarURL: m.avatarURL,
                     isTalking: m.isTalking,
                     isBot: m.isBot,
-                    isMuted: m.isMuted,
-                    isDeaf: m.isDeaf,
-                    isSelfDeaf: m.isSelfDeaf,
-                    isSelfMute: m.isSelfMute,
-                    isSuppressed: m.isSuppressed
+                    status: m.status
                 }));
             }
         }
