@@ -24,6 +24,11 @@
 > [thaYt/qs-discord](https://github.com/thaYt/qs-discord) licensed under
 > [GPL-3.0](https://github.com/thaYt/qs-discord/blob/main/LICENSE) License.
 
+> [!WARNING]
+> Due to a [technical limitation](https://github.com/OpenAsar/arrpc/issues/61) of
+> `arrpc` (an open implementation of Discord's RPC), this tool will not work with
+> third-party Discord clients such as `vesktop` or `equibop`.
+
 ## Installation
 
 - Manual Install
