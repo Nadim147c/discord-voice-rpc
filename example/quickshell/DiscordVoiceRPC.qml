@@ -5,8 +5,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// This singleton is used to store the data of discord voice rpc.
-
 Singleton {
     id: discordVoiceRPC
     property bool isVoiceActive: false
@@ -32,8 +30,26 @@ Singleton {
         }
     }
 
+    function clearMembers() {
+        for (let i = 0; i < members.length; ++i) {
+            if (members[i]) {
+                members[i].destroy();
+            }
+        }
+        members = [];
+    }
+
     function parseJSON(str: string) {
-        const data = JSON.parse(str);
+        clearMembers();
+
+        let data = null;
+        try {
+            data = JSON.parse(str);
+        } catch (e) {
+            isVoiceActive = false;
+            return;
+        }
+
         if (!data) {
             isVoiceActive = false;
             return;
