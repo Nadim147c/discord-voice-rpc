@@ -1,14 +1,25 @@
 {
   lib,
-  buildGoModule,
+  buildGo127Module,
 }:
-buildGoModule {
+buildGo127Module {
   pname = "discord-voice-rpc";
   version = "0.0.1-unstable-2026-03-20";
 
-  src = ./.;
+  src = lib.cleanSource (
+    lib.fileset.toSource {
+      root = ./.;
+      fileset = lib.fileset.unions [
+        ./main.go
+        ./types.go
+        ./client.go
+        ./go.mod
+        ./go.sum
+      ];
+    }
+  );
 
-  vendorHash = "sha256-mGKzxh0Hv9V2Fo61KWAhv85xQzqFpqeTmzMeCcS8ei0=";
+  vendorHash = "sha256-2ijBXEYSKKvo1XB9NSYbD47xJagKxaO+Ug81jCAsnis=";
 
   ldflags = [
     "-s"

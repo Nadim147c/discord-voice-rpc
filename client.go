@@ -7,19 +7,23 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/gorilla/websocket"
 )
 
 // ClientID is the client id for the discord voice rpc.
@@ -29,8 +33,11 @@ const ClientID = "207646673902501888"
 
 // Client is the discord ipc listener and voice state manager.
 type Client struct {
-	// ws is the websocket connection to discord.
-	ws *websocket.Conn
+	rmu  sync.Mutex // guards reads
+	wmu  sync.Mutex // guards writes
+	sock net.Conn
+
+	rw *bufio.ReadWriter
 
 	ctx  context.Context
 	http http.Client
@@ -44,8 +51,107 @@ type Client struct {
 	state *VoiceState
 }
 
+const (
+	Handshake uint32 = 0 //	Sent by the client to initiate the connection
+	Frame     uint32 = 1 // Used for all standard RPC commands and events
+	Close     uint32 = 2 // Sent by either side to close the connection
+	Ping      uint32 = 3 // Sent to check if the connection is alive
+	Pong      uint32 = 4 // Response to a `Ping`
+)
+
+const MaxBufSize = 10 * 1024 * 1024
+
+func (c *Client) writeJSON(op uint32, v any) error {
+	p, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return c.writeMessage(op, p)
+}
+
+func (c *Client) writeMessage(op uint32, buf []byte) error {
+	if len(buf) > MaxBufSize {
+		return errors.New("discord message is too big")
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+
+	var header [8]byte
+	binary.LittleEndian.PutUint32(header[:4], op)
+	binary.LittleEndian.PutUint32(header[4:], uint32(len(buf))) //nolint
+	_, err := c.rw.Write(header[:])
+	if err != nil {
+		return err
+	}
+	_, err = c.rw.Write(buf)
+	if err != nil {
+		return err
+	}
+	return c.rw.Flush()
+}
+
+func (c *Client) readMessage() (uint32, []byte, error) {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+
+	var header [8]byte
+	_, err := io.ReadFull(c.rw, header[:])
+	if err != nil {
+		return 0, nil, err
+	}
+	op := binary.LittleEndian.Uint32(header[:4])
+	size := binary.LittleEndian.Uint32(header[4:])
+	if size > MaxBufSize {
+		_, err := c.rw.Discard(int(size))
+		if err != nil {
+			return 0, nil, err
+		}
+		return 0, nil, errors.New("discord message is too big")
+	}
+
+	buf := make([]byte, size)
+	_, err = io.ReadFull(c.rw, buf)
+	if err != nil {
+		return 0, nil, err
+	}
+	return op, buf, nil
+}
+
 // NewClient creates a new client.
 func NewClient() *Client { return new(Client) }
+
+// socketDirs returns the directories where discord creates its ipc socket.
+func socketDirs() []string {
+	var dirs []string
+	for _, env := range []string{"XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"} {
+		if v := os.Getenv(env); v != "" {
+			dirs = append(dirs, v)
+		}
+	}
+	if v := os.Getenv("XDG_RUNTIME_DIR"); v != "" {
+		dirs = append(dirs, filepath.Join(v, "app/com.discordapp.Discord"))
+	}
+	return append(dirs, "/tmp")
+}
+
+// dialIPC tries discord-ipc-0 .. discord-ipc-9 in every known directory and
+// returns the first connection that succeeds.
+func dialIPC(ctx context.Context) (net.Conn, error) {
+	var d net.Dialer
+	var errs []error
+	for i := range 10 {
+		for _, dir := range socketDirs() {
+			path := filepath.Join(dir, fmt.Sprintf("discord-ipc-%d", i))
+			conn, err := d.DialContext(ctx, "unix", path)
+			if err == nil {
+				slog.Info("Connected to discord ipc", "path", path)
+				return conn, nil
+			}
+			errs = append(errs, err)
+		}
+	}
+	return nil, fmt.Errorf("could not connect to discord ipc: %w", errors.Join(errs...))
+}
 
 // Listen listens to the discord ipc and handles the commands. It blocks until
 // ctx is done.
@@ -53,36 +159,30 @@ func (c *Client) Listen(ctx context.Context) error {
 	c.ctx = ctx
 	defer func() { c.ctx = nil }()
 
-	headers := http.Header{}
-	headers.Add("Origin", "http://localhost:3000")
-
-	url := should(url.Parse("ws://127.0.0.1:6463/"))
-	query := url.Query()
-	query.Set("client_id", ClientID)
-	query.Set("v", "1")
-	url.RawQuery = query.Encode()
-
-	conn, initialResponse, err := websocket.DefaultDialer.DialContext(ctx, url.String(), headers)
+	conn, err := dialIPC(ctx)
 	if err != nil {
 		return err
 	}
-	initialResponse.Body.Close() //nolint
 	defer conn.Close()
 
-	c.ws = conn
+	context.AfterFunc(ctx, func() { conn.Close() }) //nolint
+
+	c.sock = conn
+	c.rw = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
 	authcode, err := os.ReadFile(c.getTokenFile())
 	if err == nil {
 		c.authcode = string(bytes.TrimSpace(authcode))
 	}
 
-	// force close the connection when context is done.
-	context.AfterFunc(ctx, func() {
-		conn.Close() //nolint
-	})
+	// discord replies with a READY dispatch frame, which handleEvent picks up.
+	err = c.writeJSON(Handshake, map[string]any{"v": 1, "client_id": ClientID})
+	if err != nil {
+		return err
+	}
 
 	for {
-		_, message, err := conn.ReadMessage()
+		op, message, err := c.readMessage()
 
 		// we ignore the connection err when context is done.
 		select {
@@ -93,6 +193,20 @@ func (c *Client) Listen(ctx context.Context) error {
 
 		if err != nil {
 			return err
+		}
+
+		switch op {
+		case Ping:
+			if err := c.writeMessage(Pong, message); err != nil {
+				return err
+			}
+			continue
+		case Close:
+			return fmt.Errorf("discord closed the connection: %s", message)
+		case Frame:
+		default:
+			slog.Info("ignoring ipc opcode", "op", op)
+			continue
 		}
 
 		var msg Message
@@ -280,7 +394,7 @@ func (c *Client) subscribe(event Event, args Map) error {
 	req := NewMessage(CmdSubscribe)
 	req.Event = event
 	req.Args = args
-	return c.ws.WriteJSON(req)
+	return c.writeJSON(Frame, req)
 }
 
 // unsubscribe unsubscribes from an event.
@@ -288,7 +402,7 @@ func (c *Client) unsubscribe(event Event, args map[string]any) error {
 	req := NewMessage(CmdUnsubscribe)
 	req.Event = event
 	req.Args = args
-	return c.ws.WriteJSON(req)
+	return c.writeJSON(Frame, req)
 }
 
 // subscribeChannel subscribes to an event on a specific channel.
@@ -348,7 +462,7 @@ func (c *Client) unsubVoice(channelID string) error {
 // channel.
 func (c *Client) getCurrentVoiceChannel() error {
 	req := NewMessage(CmdGetSelectedVoiceChannel)
-	return c.ws.WriteJSON(req)
+	return c.writeJSON(Frame, req)
 }
 
 // authorize authorizes the client with an access token.
@@ -356,7 +470,7 @@ func (c *Client) authorize(access string) error {
 	req := NewMessage(CmdAuthenticate)
 	req.SetArg("access_token", access)
 	slog.Info("Requesting authorization via access_token")
-	return c.ws.WriteJSON(req)
+	return c.writeJSON(Frame, req)
 }
 
 // requestAuthcode requests an authcode from Discord Client.
@@ -373,7 +487,7 @@ func (c *Client) requestAuthcode() error {
 		"prompt": "none",
 	}
 	slog.Info("Requesting authcode from discord client")
-	return c.ws.WriteJSON(req)
+	return c.writeJSON(Frame, req)
 }
 
 type StreamkitRequest struct {

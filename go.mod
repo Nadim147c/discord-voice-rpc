@@ -1,11 +1,10 @@
 module github.com/Nadim147c/discord-voice-rpc
 
-go 1.25.5
+go 1.27
 
 require (
 	github.com/charmbracelet/log v1.0.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
-	github.com/gorilla/websocket v1.5.3
 	github.com/spf13/cast v1.10.0
 )
 
