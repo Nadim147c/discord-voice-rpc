@@ -1,11 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cast"
@@ -238,6 +240,7 @@ type Output struct {
 
 // OutputMember is a member of the voice channel used for printing output.
 type OutputMember struct {
+	idInt      uint64 `json:"-"`
 	ID         string `json:"id"`
 	Username   string `json:"username"`
 	Nickname   string `json:"nickname"`
@@ -257,6 +260,7 @@ func GetOutput(vs *VoiceState) *Output {
 	members := make([]OutputMember, 0, len(vs.Members))
 	for _, member := range vs.Members {
 		members = append(members, OutputMember{
+			idInt:      should(strconv.ParseUint(member.User.ID, 10, 64)),
 			ID:         member.User.ID,
 			Username:   member.User.Username,
 			Nickname:   member.User.Nickname,
@@ -268,6 +272,11 @@ func GetOutput(vs *VoiceState) *Output {
 			Status:     member.Status.Encode(),
 		})
 	}
+
+	slices.SortStableFunc(members, func(a, b OutputMember) int {
+		return cmp.Compare(a.idInt, b.idInt)
+	})
+
 	return &Output{
 		GuildID:     vs.GuildID,
 		ChannelID:   vs.ID,
