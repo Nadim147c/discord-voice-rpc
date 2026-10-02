@@ -24,6 +24,7 @@ buildGo127Module {
   ldflags = [
     "-s"
     "-w"
+    "-X main.buildType=release"
   ];
 
   meta = {

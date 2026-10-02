@@ -1,3 +1,4 @@
 *.json
 .direnv/*
 result
+*.debug.json

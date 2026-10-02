@@ -12,7 +12,16 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-var debug = flag.Bool("debug", false, "enable debug logging")
+var (
+	buildType   = "debug"
+	noDebugFlag bool
+)
+
+var debug = buildType == "debug" && !noDebugFlag
+
+func init() {
+	flag.BoolVar(&noDebugFlag, "no-debug", false, "disable debug logging")
+}
 
 func main() {
 	flag.Parse()
@@ -22,7 +31,7 @@ func main() {
 	defer cancel()
 
 	var level log.Level // zero value is info
-	if *debug {
+	if debug {
 		level = log.DebugLevel
 	}
 

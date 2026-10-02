@@ -214,7 +214,7 @@ func (c *Client) Listen(ctx context.Context) error {
 			slog.Error("failed unmarshal message", "error", err)
 			continue
 		}
-		slog.Info("Message", "command", msg.Command, "event", msg.Event)
+		slog.Debug("Message", "command", msg.Command, "event", msg.Event)
 
 		if err := c.handleCommand(msg); err != nil {
 			slog.Error("failed handle command", "error", err)
@@ -270,8 +270,8 @@ func (c *Client) handleCommand(msg Message) error {
 		return nil
 	default:
 		slog.Info("unknown command", "command", msg.Command)
-		if *debug {
-			os.WriteFile("unknown-command.json", should(json.Marshal(msg)), 0o640) //nolint
+		if debug {
+			os.WriteFile("unknown-command.debug.json", should(json.Marshal(msg)), 0o640) //nolint
 		}
 		return nil
 	}
@@ -327,8 +327,8 @@ func (c *Client) handleEvent(msg Message) error {
 		return nil
 	default:
 		slog.Info("unknown event", "event", msg.Event)
-		if *debug {
-			os.WriteFile("unknown-event.json", should(json.Marshal(msg)), 0o640) //nolint
+		if debug {
+			os.WriteFile("unknown-event.debug.json", should(json.Marshal(msg)), 0o640) //nolint
 		}
 		return nil
 	}
