@@ -138,7 +138,6 @@ func socketDirs() []string {
 // returns the first connection that succeeds.
 func dialIPC(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
-	var errs []error
 	for i := range 10 {
 		for _, dir := range socketDirs() {
 			path := filepath.Join(dir, fmt.Sprintf("discord-ipc-%d", i))
@@ -147,10 +146,10 @@ func dialIPC(ctx context.Context) (net.Conn, error) {
 				slog.Info("Connected to discord ipc", "path", path)
 				return conn, nil
 			}
-			errs = append(errs, err)
+			slog.Debug("ipc connection error", "error", err)
 		}
 	}
-	return nil, fmt.Errorf("could not connect to discord ipc: %w", errors.Join(errs...))
+	return nil, ErrIpcNotFound
 }
 
 // Listen listens to the discord ipc and handles the commands. It blocks until
@@ -265,7 +264,7 @@ func (c *Client) handleCommand(msg Message) error {
 	case CmdUnsubscribe:
 		slog.Info("unsubscribed from event", "event", msg.Data.GetString("evt"))
 		return nil
-	case CmdGetVoiceSettings, CmdSetVoiceSettings:
+	case CmdGetVoiceSettings, CmdSetVoiceSettings, CmdSetUserVoiceSettings:
 		slog.Info("get voice settings", "event", msg.Data.GetString("evt"))
 		return nil
 	default:
@@ -410,6 +409,26 @@ func (c *Client) subscribeChannel(event Event, channel string) error {
 	var m Map
 	m.Set("channel_id", channel)
 	return c.subscribe(event, m)
+}
+
+// setUserMute mutes user with given id.
+func (c *Client) setUserMute(id string, mute bool) error {
+	var m Map
+	m.Set("user_id", id)
+	m.Set("mute", mute)
+	req := NewMessage(CmdSetUserVoiceSettings)
+	req.Args = m
+	return c.writeJSON(1, req)
+}
+
+// setUserVolume set volume of user with given id.
+func (c *Client) setUserVolume(id string, vol uint) error {
+	var m Map
+	m.Set("user_id", id)
+	m.Set("volume", vol)
+	req := NewMessage(CmdSetUserVoiceSettings)
+	req.Args = m
+	return c.writeJSON(1, req)
 }
 
 // unsubscribeChannel unsubscribes from an event on a specific channel.

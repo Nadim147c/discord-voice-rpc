@@ -2,10 +2,12 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,8 +15,23 @@ import (
 	"github.com/spf13/cast"
 )
 
+var ErrIpcNotFound = errors.New("discord ipc not found")
+
 // should is a helper function to ignore the error.
 func should[T any](v T, _ error) T { return v }
+
+// Request is a command sent to the discord ipc.
+type Request string
+
+// String returns the string representation of the command.
+func (c Request) String() string {
+	return string(c)
+}
+
+const (
+	ReqMute   Request = "MUTE"
+	ReqVolume Request = "VOLUME"
+)
 
 // Command is a command sent to the discord ipc.
 type Command string
@@ -30,6 +47,7 @@ const (
 	CmdGetSelectedVoiceChannel Command = "GET_SELECTED_VOICE_CHANNEL"
 	CmdGetVoiceSettings        Command = "GET_VOICE_SETTINGS"
 	CmdSetVoiceSettings        Command = "SET_VOICE_SETTINGS"
+	CmdSetUserVoiceSettings    Command = "SET_USER_VOICE_SETTINGS"
 	CmdSubscribe               Command = "SUBSCRIBE"
 	CmdUnsubscribe             Command = "UNSUBSCRIBE"
 	CmdDispatch                Command = "DISPATCH"
@@ -181,12 +199,12 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 
 // VoiceMember is a  member of voice channel.
 type VoiceMember struct {
-	Mute     bool    `mapstructure:"mute"`
-	Nickname string  `mapstructure:"nick"`
-	Talking  bool    `mapstructure:"talking"`
-	User     User    `mapstructure:"user"`
-	Status   Status  `mapstructure:"voice_state"`
-	Volume   float64 `mapstructure:"volume"`
+	Mute     bool   `mapstructure:"mute"`
+	Nickname string `mapstructure:"nick"`
+	Talking  bool   `mapstructure:"talking"`
+	User     User   `mapstructure:"user"`
+	Status   Status `mapstructure:"voice_state"`
+	Volume   uint   `mapstructure:"volume"`
 }
 
 // User is a discord user.
@@ -250,6 +268,7 @@ type OutputMember struct {
 	IsTalking  bool   `json:"isTalking"`
 	IsBot      bool   `json:"isBot"`
 	Status     uint8  `json:"status"`
+	Volume     uint   `json:"volume"`
 }
 
 // GetOutput converts a VoiceState to an Output.
@@ -270,6 +289,7 @@ func GetOutput(vs *VoiceState) *Output {
 			IsTalking:  member.Talking,
 			IsBot:      member.User.Bot,
 			Status:     member.Status.Encode(),
+			Volume:     member.Volume,
 		})
 	}
 
@@ -283,5 +303,42 @@ func GetOutput(vs *VoiceState) *Output {
 		ChannelName: vs.Name,
 		UserLimit:   vs.UserLimit,
 		Members:     members,
+	}
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func NewContextReader(ctx context.Context, r io.Reader) io.Reader {
+	return &contextReader{
+		ctx: ctx,
+		r:   r,
+	}
+}
+
+func (cr *contextReader) Read(p []byte) (int, error) {
+	if err := cr.ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	type result struct {
+		n   int
+		err error
+	}
+
+	ch := make(chan result, 1)
+
+	go func() {
+		n, err := cr.r.Read(p)
+		ch <- result{n: n, err: err}
+	}()
+
+	select {
+	case <-cr.ctx.Done():
+		return 0, cr.ctx.Err()
+	case res := <-ch:
+		return res.n, res.err
 	}
 }

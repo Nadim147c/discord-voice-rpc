@@ -74,7 +74,8 @@ Singleton {
                     avatarURL: m.avatarURL,
                     isTalking: m.isTalking,
                     isBot: m.isBot,
-                    status: m.status
+                    status: m.status,
+                    volume: m.volume
                 }));
             }
         }

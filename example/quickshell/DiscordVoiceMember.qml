@@ -12,6 +12,7 @@ QtObject {
     property bool isTalking: false
     property bool isBot: false
     property int status: 0
+    property int volume: 100
 
     readonly property int statusMute: 1 << 0;
     readonly property int statusSelfMute: 1 << 1;
