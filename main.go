@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/log"
 )
@@ -32,11 +32,27 @@ func main() {
 	})
 	slog.SetDefault(slog.New(handler))
 
-	client := NewClient()
-	if err := client.Listen(ctx); err != nil &&
-		!errors.Is(context.Canceled, err) &&
-		!errors.Is(context.DeadlineExceeded, err) {
-		slog.Error("failed to listen", "err", err)
-		os.Exit(1)
+	ticker := time.NewTicker(2 * time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			client := NewClient()
+			err := client.Listen(ctx)
+			if err != nil && !isDone(ctx) {
+				slog.Error("failed to listen", "err", err)
+				os.Exit(1)
+			}
+		}
+	}
+}
+
+func isDone(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
 	}
 }
