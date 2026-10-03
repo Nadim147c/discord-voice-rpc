@@ -45,6 +45,8 @@ type Client struct {
 	loggedIn bool
 	// channelID is the ID of the voice channel.
 	channelID string
+	// userID is the ID of the current logged-in user.
+	userID string
 	// state is the voice channel state.
 	state *VoiceState
 }
@@ -238,6 +240,12 @@ func (c *Client) handleCommand(msg Message) error {
 			c.authcode = ""
 			return c.requestAuthcode()
 		}
+		var id NestedUserID
+		err := json.Unmarshal(msg.Data.b, &id)
+		if err != nil {
+			return err
+		}
+		c.userID = id.User.ID
 		c.loggedIn = true
 		if err := c.getCurrentVoiceChannel(); err != nil {
 			return err
@@ -412,6 +420,9 @@ func (c *Client) subscribeChannel(event Event, channel string) error {
 
 // setUserMute mutes user with given id.
 func (c *Client) setUserMute(id string, mute bool) error {
+	if id == c.userID {
+		return c.setCurrentUserMute(mute)
+	}
 	var m Map
 	m.Set("user_id", id)
 	m.Set("mute", mute)
@@ -420,12 +431,33 @@ func (c *Client) setUserMute(id string, mute bool) error {
 	return c.writeJSON(1, req)
 }
 
+// setUserMute mutes current user.
+func (c *Client) setCurrentUserMute(mute bool) error {
+	var m Map
+	m.Set("mute", mute)
+	req := NewMessage(CmdSetVoiceSettings)
+	req.Args = m
+	return c.writeJSON(1, req)
+}
+
 // setUserVolume set volume of user with given id.
 func (c *Client) setUserVolume(id string, vol uint) error {
+	if id == c.userID {
+		return c.setCurrentUserVolume(vol)
+	}
 	var m Map
 	m.Set("user_id", id)
 	m.Set("volume", vol)
 	req := NewMessage(CmdSetUserVoiceSettings)
+	req.Args = m
+	return c.writeJSON(1, req)
+}
+
+// setUserVolume set volume of current user.
+func (c *Client) setCurrentUserVolume(vol uint) error {
+	var m Map
+	m.Set("volume", vol)
+	req := NewMessage(CmdSetVoiceSettings)
 	req.Args = m
 	return c.writeJSON(1, req)
 }

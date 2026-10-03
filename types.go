@@ -245,7 +245,7 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 	return json.Marshal(slice)
 }
 
-type VoiceMemberID struct {
+type NestedUserID struct {
 	User struct {
 		ID string `json:"id"`
 	} `json:"user"`
