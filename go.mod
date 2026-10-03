@@ -4,7 +4,6 @@ go 1.27
 
 require (
 	github.com/charmbracelet/log v1.0.0
-	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/spf13/cast v1.10.0
 )
 

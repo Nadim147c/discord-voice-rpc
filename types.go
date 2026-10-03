@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -77,51 +78,98 @@ var ErrKeyNotFound = errors.New("key not found")
 
 // Map is a map of strings to any. It is used to store the arguments and data of
 // a message.
-type Map map[string]any
+type Map struct {
+	v map[string]any
+	b []byte
+}
+
+var _ json.Marshaler = (*Map)(nil)
+
+func (m Map) MarshalJSON() ([]byte, error) {
+	if len(m.b) != 0 {
+		return m.b, nil
+	}
+	return json.Marshal(m.v, json.FormatNilMapAsNull(true))
+}
+
+func (m *Map) UnmarshalJSON(b []byte) error {
+	m.b = b
+	return json.Unmarshal(b, &m.v, json.FormatNilMapAsNull(true))
+}
+
+func (m *Map) IsNil() bool {
+	return m.v == nil
+}
 
 // ensure ensures that the map is initialized.
 func (m *Map) ensure() {
-	if *m == nil {
-		*m = make(Map)
+	if m.v == nil {
+		m.v = make(map[string]any)
 	}
+}
+
+func (m *Map) SetAll(v map[string]any) {
+	m.v = v
 }
 
 // Set sets the value of the key.
 func (m *Map) Set(k string, v any) {
 	m.ensure()
-	(*m)[k] = v
+	m.v[k] = v
 }
 
 // Has checks if the key exists in the map.
 func (m Map) Has(k string) bool {
 	m.ensure()
-	_, ok := m[k]
+	_, ok := m.v[k]
 	return ok
 }
 
-// GetString is like GetString but ignores the error and returns an empty string
-// if the key is not found.
 func (m Map) GetString(k string) string {
 	return should(m.GetStringE(k))
 }
 
-// GetStringE returns the value of the key as a string. It returns an error if
-// the key is not found or failed to convert the data to string.
 func (m Map) GetStringE(k string) (string, error) {
 	m.ensure()
-	v, ok := m[k]
+	v, ok := m.v[k]
 	if !ok {
 		return "", ErrKeyNotFound
 	}
 	return cast.ToStringE(v)
 }
 
+func (m Map) GetUint(k string) uint {
+	return should(m.GetUintE(k))
+}
+
+func (m Map) GetUintE(k string) (uint, error) {
+	m.ensure()
+	v, ok := m.v[k]
+	if !ok {
+		return 0, ErrKeyNotFound
+	}
+	return cast.ToUintE(v)
+}
+
+func (m Map) GetBool(k string) bool {
+	return should(m.GetBoolE(k))
+}
+
+func (m Map) GetBoolE(k string) (bool, error) {
+	m.ensure()
+	v, ok := m.v[k]
+	if !ok {
+		return false, ErrKeyNotFound
+	}
+	return cast.ToBoolE(v)
+}
+
 // Message is a message sent to the discord ipc.
 type Message struct {
 	Command Command `json:"cmd"`
 	Event   Event   `json:"evt,omitempty"`
-	Args    Map     `json:"args,omitempty"`
-	Data    Map     `json:"data,omitempty"`
+	Args    Map     `json:"args"`
+	Data    Map     `json:"data"`
 	Nonce   string  `json:"nonce"`
 }
 
@@ -158,10 +206,10 @@ func (r *Message) SetData(k string, v any) {
 
 // VoiceState is the voice channel state. It holds users and their voice states.
 type VoiceState struct {
-	GuildID   string       `mapstructure:"guild_id"`
-	ID        string       `mapstructure:"id"`
-	Name      string       `mapstructure:"name"`
-	UserLimit int64        `mapstructure:"user_limit"`
+	GuildID   string       `json:"guild_id"`
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	UserLimit int64        `json:"user_limit"`
 	Members   VoiceMembers `json:"voice_states"`
 }
 
@@ -197,23 +245,29 @@ func (vm VoiceMembers) MarshalJSON() ([]byte, error) {
 	return json.Marshal(slice)
 }
 
+type VoiceMemberID struct {
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
+}
+
 // VoiceMember is a  member of voice channel.
 type VoiceMember struct {
-	Mute     bool   `mapstructure:"mute"`
-	Nickname string `mapstructure:"nick"`
-	Talking  bool   `mapstructure:"talking"`
-	User     User   `mapstructure:"user"`
-	Status   Status `mapstructure:"voice_state"`
-	Volume   uint   `mapstructure:"volume"`
+	Mute     bool    `json:"mute"`
+	Nickname string  `json:"nick"`
+	Talking  bool    `json:"talking"`
+	User     User    `json:"user"`
+	Status   Status  `json:"voice_state"`
+	Volume   float64 `json:"volume"`
 }
 
 // User is a discord user.
 type User struct {
-	Avatar   string `mapstructure:"avatar"`
-	Nickname string `mapstructure:"global_name"`
-	Bot      bool   `mapstructure:"bot"`
-	ID       string `mapstructure:"id"`
-	Username string `mapstructure:"username"`
+	Avatar   string `json:"avatar"`
+	Nickname string `json:"global_name"`
+	Bot      bool   `json:"bot"`
+	ID       string `json:"id"`
+	Username string `json:"username"`
 }
 
 // AvatarURL returns the avatar URL of the user.
@@ -223,11 +277,11 @@ func (u User) AvatarURL() string {
 
 // Status is a voice status of a VoiceMember.
 type Status struct {
-	Deaf     bool `mapstructure:"deaf"`
-	Mute     bool `mapstructure:"mute"`
-	SelfDeaf bool `mapstructure:"self_deaf"`
-	SelfMute bool `mapstructure:"self_mute"`
-	Suppress bool `mapstructure:"suppress"`
+	Deaf     bool `json:"deaf"`
+	Mute     bool `json:"mute"`
+	SelfDeaf bool `json:"self_deaf"`
+	SelfMute bool `json:"self_mute"`
+	Suppress bool `json:"suppress"`
 }
 
 func toggleBit(b bool, i uint8) uint8 {
@@ -237,13 +291,14 @@ func toggleBit(b bool, i uint8) uint8 {
 	return 0
 }
 
-func (s Status) Encode() uint8 {
+func encodeMute(myMute bool, s Status) uint8 {
 	var out uint8
-	out |= toggleBit(s.Mute, 1<<0)     // 1
-	out |= toggleBit(s.SelfMute, 1<<1) // 2
-	out |= toggleBit(s.Deaf, 1<<2)     // 4
-	out |= toggleBit(s.SelfDeaf, 1<<3) // 8
-	out |= toggleBit(s.Suppress, 1<<4) // 16
+	out |= toggleBit(myMute, 1<<0)     // 1
+	out |= toggleBit(s.Mute, 1<<1)     // 1
+	out |= toggleBit(s.SelfMute, 1<<2) // 2
+	out |= toggleBit(s.Deaf, 1<<3)     // 4
+	out |= toggleBit(s.SelfDeaf, 1<<4) // 8
+	out |= toggleBit(s.Suppress, 1<<5) // 16
 	return out
 }
 
@@ -288,8 +343,8 @@ func GetOutput(vs *VoiceState) *Output {
 			AvatarURL:  member.User.AvatarURL(),
 			IsTalking:  member.Talking,
 			IsBot:      member.User.Bot,
-			Status:     member.Status.Encode(),
-			Volume:     member.Volume,
+			Status:     encodeMute(member.Mute, member.Status),
+			Volume:     uint(math.Round(member.Volume)),
 		})
 	}
 

@@ -22,8 +22,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-
-	"github.com/go-viper/mapstructure/v2"
 )
 
 // ClientID is the client id for the discord voice rpc.
@@ -244,15 +242,15 @@ func (c *Client) handleCommand(msg Message) error {
 		if err := c.getCurrentVoiceChannel(); err != nil {
 			return err
 		}
-		return c.subscribe(EvtVoiceChannelSelect, nil)
+		return c.subscribe(EvtVoiceChannelSelect, Map{})
 	case CmdGetSelectedVoiceChannel:
-		if msg.Data == nil {
+		if msg.Data.IsNil() {
 			c.reset()
 			return nil
 		}
 
 		var state VoiceState
-		err := mapstructure.Decode(msg.Data, &state)
+		err := json.Unmarshal(msg.Data.b, &state)
 		if err != nil {
 			return err
 		}
@@ -265,8 +263,8 @@ func (c *Client) handleCommand(msg Message) error {
 		slog.Info("unsubscribed from event", "event", msg.Data.GetString("evt"))
 		return nil
 	case CmdGetVoiceSettings, CmdSetVoiceSettings, CmdSetUserVoiceSettings:
-		slog.Info("get voice settings", "event", msg.Data.GetString("evt"))
-		return nil
+		slog.Info("user voice settings update")
+		return c.getCurrentVoiceChannel()
 	default:
 		slog.Info("unknown command", "command", msg.Command)
 		if debug {
@@ -289,7 +287,7 @@ func (c *Client) handleEvent(msg Message) error {
 		return c.requestAuthcode()
 	case EvtVoiceStateUpdate, EvtVoiceStateCreate:
 		var member VoiceMember
-		err := mapstructure.Decode(msg.Data, &member)
+		err := json.Unmarshal(msg.Data.b, &member)
 		if err != nil {
 			return err
 		}
@@ -297,7 +295,7 @@ func (c *Client) handleEvent(msg Message) error {
 		return nil
 	case EvtVoiceStateDelete:
 		var member VoiceMember
-		err := mapstructure.Decode(msg.Data, &member)
+		err := json.Unmarshal(msg.Data.b, &member)
 		if err != nil {
 			return err
 		}
@@ -324,6 +322,7 @@ func (c *Client) handleEvent(msg Message) error {
 	case EvtError:
 		slog.Error("Error event detected", "msg", msg.Data)
 		return nil
+
 	default:
 		slog.Info("unknown event", "event", msg.Event)
 		if debug {
@@ -363,7 +362,7 @@ func (c *Client) deleteMember(id string) {
 
 // setMember sets the member in the client state.
 func (c *Client) setMember(m VoiceMember) {
-	if c.state == nil {
+	if c.state == nil || m.User.ID == "" {
 		return
 	}
 	c.ensureMembers()
@@ -397,7 +396,7 @@ func (c *Client) subscribe(event Event, args Map) error {
 }
 
 // unsubscribe unsubscribes from an event.
-func (c *Client) unsubscribe(event Event, args map[string]any) error {
+func (c *Client) unsubscribe(event Event, args Map) error {
 	req := NewMessage(CmdUnsubscribe)
 	req.Event = event
 	req.Args = args
@@ -451,7 +450,7 @@ var voiceEvents = []Event{
 // Returns after first subscription error.
 func (c *Client) subscribeVoice(channelID string) error {
 	if c.channelID != "" {
-		if err := c.unsubVoice(channelID); err != nil {
+		if err := c.unsubVoice(c.channelID); err != nil {
 			return err
 		}
 	}
@@ -495,7 +494,7 @@ func (c *Client) authorize(access string) error {
 // requestAuthcode requests an authcode from Discord Client.
 func (c *Client) requestAuthcode() error {
 	req := NewMessage(CmdAuthorize)
-	req.Args = map[string]any{
+	req.Args.SetAll(map[string]any{
 		"client_id": ClientID,
 		"scopes": []string{
 			"rpc",
@@ -504,7 +503,7 @@ func (c *Client) requestAuthcode() error {
 			"identify",
 		},
 		"prompt": "none",
-	}
+	})
 	slog.Info("Requesting authcode from discord client")
 	return c.writeJSON(Frame, req)
 }
